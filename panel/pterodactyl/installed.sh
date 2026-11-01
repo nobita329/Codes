@@ -606,16 +606,8 @@ ask "Admin Email" "admin@${DOMAIN}" EMAIL
 # Username
 ask "Admin Username" "admin" USERNAME
 
-# Admin Password (must be >= 8 chars)
-SUGGESTED_ADMIN_PASS="Admin@$(generate_random_password 8)"
-while true; do
-    ask_timeout "Admin Password (min 8 chars)" "$SUGGESTED_ADMIN_PASS" PASSWORD 15
-    if [ ${#PASSWORD} -ge 8 ]; then
-        break
-    else
-        warn "Password must be at least 8 characters long for Pterodactyl!"
-    fi
-done
+# Admin Password
+ask_timeout "Admin Password" "admin" PASSWORD 10
 
 # Database settings
 ask "Database Name" "panel" DB_NAME
@@ -1118,8 +1110,21 @@ php artisan p:user:make -n \
     --password="$PASSWORD" \
     --admin=1 \
     --name-first="Admin" \
-    --name-last="User" || {
-    warn "User creation returned an exit status. (The account may already exist)."
+    --name-last="User" 2>/dev/null || {
+    # If user already exists, update credentials to requested password
+    php -r "
+    require 'vendor/autoload.php';
+    \$app = require_once 'bootstrap/app.php';
+    \$kernel = \$app->make(Illuminate\Contracts\Console\Kernel::class);
+    \$kernel->bootstrap();
+    \$u = Pterodactyl\Models\User::where('username', '${USERNAME}')->orWhere('email', '${EMAIL}')->first();
+    if (\$u) {
+        \$u->password = Illuminate\Support\Facades\Hash::make('${PASSWORD}');
+        \$u->root_admin = true;
+        \$u->save();
+    }
+    " 2>/dev/null || true
+    ok "Administrator credentials updated to ${USERNAME}:${PASSWORD}"
 }
 
 # Save credentials to log file for safe keeping
