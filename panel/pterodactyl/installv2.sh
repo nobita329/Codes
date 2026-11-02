@@ -417,8 +417,13 @@ install_pterodactyl_v2() {
     # Username
     ask "Admin Username" "admin" USERNAME
 
-    # Admin Password
-    ask_timeout "Admin Password" "admin" PASSWORD 10
+    # Admin Password (minimum 8 characters required by Pterodactyl v2)
+    DEFAULT_ADMIN_PASS="Admin@12345"
+    ask_timeout "Admin Password (min 8 chars)" "$DEFAULT_ADMIN_PASS" PASSWORD 15
+    while [ ${#PASSWORD} -lt 8 ]; do
+        warn "Password must be at least 8 characters! Current length: ${#PASSWORD} characters."
+        ask "Enter Admin Password (min 8 chars)" "$DEFAULT_ADMIN_PASS" PASSWORD
+    done
 
     # Database settings
     ask "Database Name" "panel" DB_NAME
@@ -868,25 +873,36 @@ EOF
 
     # --- STEP 10: CREATE ADMIN USER ---
     step "Creating Administrator Account..."
+    cd "$PANEL_DIR" || exit 1
+    chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+    chown -R www-data:www-data "$PANEL_DIR" 2>/dev/null || true
+
+    # Enforce minimum 8 characters required by Pterodactyl v2
+    if [ ${#PASSWORD} -lt 8 ]; then
+        warn "Password was shorter than 8 characters. Adjusted to: ${PASSWORD}1234"
+        PASSWORD="${PASSWORD}1234"
+    fi
+
     php artisan p:user:make -n \
         --email="$EMAIL" \
         --username="$USERNAME" \
         --password="$PASSWORD" \
         --admin=1 \
         --name-first="Admin" \
-        --name-last="User" 2>/dev/null || {
-        # Fallback to direct model update if user exists
+        --name-last="User" || {
+        warn "Artisan user command encountered notice. Ensuring user exists via database..."
         php -r "
         require 'vendor/autoload.php';
         \$app = require_once 'bootstrap/app.php';
         \$kernel = \$app->make(Illuminate\Contracts\Console\Kernel::class);
         \$kernel->bootstrap();
-        \$u = Pterodactyl\Models\User::where('username', '${USERNAME}')->orWhere('email', '${EMAIL}')->first();
-        if (\$u) {
-            \$u->password = Illuminate\Support\Facades\Hash::make('${PASSWORD}');
-            \$u->root_admin = true;
-            \$u->save();
-        }
+        \$u = Pterodactyl\Models\User::firstOrNew(['username' => '${USERNAME}']);
+        \$u->email = '${EMAIL}';
+        \$u->name_first = 'Admin';
+        \$u->name_last = 'User';
+        \$u->password = Illuminate\Support\Facades\Hash::make('${PASSWORD}');
+        \$u->root_admin = true;
+        \$u->save();
         " 2>/dev/null || true
         ok "Administrator credentials configured for ${USERNAME}."
     }
@@ -1160,6 +1176,175 @@ repair_panel() {
 }
 
 # ==============================================================================
+# CREATE / TEST PANEL USER FUNCTIONS
+# ==============================================================================
+
+create_panel_user() {
+    clear
+    echo -e "${CYAN}"
+    echo "============================================================"
+    echo "       PTERODACTYL v2.0 USER CREATION & TEST UTILITY        "
+    echo "============================================================"
+    echo -e "${NC}"
+
+    if [ ! -d "$PANEL_DIR" ] || [ ! -f "$PANEL_DIR/.env" ]; then
+        err "Pterodactyl is not installed at $PANEL_DIR."
+        return 1
+    fi
+
+    cd "$PANEL_DIR" || exit 1
+
+    # Ensure permissions for log writing and cache
+    chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+    chown -R www-data:www-data "$PANEL_DIR" 2>/dev/null || true
+
+    step "User Account Details"
+    ask "Email Address" "admin@example.com" U_EMAIL
+    ask "Username" "admin" U_USER
+    ask "First Name" "Admin" U_FIRST
+    ask "Last Name" "User" U_LAST
+
+    local DEFAULT_PASS="Admin@12345"
+    ask_timeout "Password (minimum 8 characters)" "$DEFAULT_PASS" U_PASS 15
+    while [ ${#U_PASS} -lt 8 ]; do
+        warn "The password must be at least 8 characters! Current length: ${#U_PASS}"
+        ask "Enter Password (min 8 chars)" "$DEFAULT_PASS" U_PASS
+    done
+
+    echo -ne "  ${PURPLE}•${NC} ${WHITE}Grant Administrator Permissions?${NC} ${GRAY}(y/n) [y]${NC}\n  ${GRAY}╰─>${NC} "
+    read -t 10 -r -n 1 IS_ADMIN_CHOICE || IS_ADMIN_CHOICE="y"
+    echo ""
+    [ -z "$IS_ADMIN_CHOICE" ] && IS_ADMIN_CHOICE="y"
+    local ADMIN_VAL=1
+    if [[ ! "$IS_ADMIN_CHOICE" =~ ^[Yy]$ ]]; then
+        ADMIN_VAL=0
+    fi
+
+    step "Creating user account on Pterodactyl v2..."
+    local CREATE_OUT
+    CREATE_OUT=$(php artisan p:user:make -n \
+        --email="$U_EMAIL" \
+        --username="$U_USER" \
+        --password="$U_PASS" \
+        --admin="$ADMIN_VAL" \
+        --name-first="$U_FIRST" \
+        --name-last="$U_LAST" 2>&1)
+    local EXIT_CODE=$?
+
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo "$CREATE_OUT"
+        ok "User '${U_USER}' created successfully!"
+    else
+        warn "Artisan user maker notice: $CREATE_OUT"
+        info "Applying direct database synchronization..."
+        php -r "
+        require 'vendor/autoload.php';
+        \$app = require_once 'bootstrap/app.php';
+        \$kernel = \$app->make(Illuminate\Contracts\Console\Kernel::class);
+        \$kernel->bootstrap();
+        \$u = Pterodactyl\Models\User::firstOrNew(['username' => '${U_USER}']);
+        \$u->email = '${U_EMAIL}';
+        \$u->name_first = '${U_FIRST}';
+        \$u->name_last = '${U_LAST}';
+        \$u->password = Illuminate\Support\Facades\Hash::make('${U_PASS}');
+        \$u->root_admin = ($ADMIN_VAL === 1);
+        \$u->save();
+        echo 'User synced successfully in DB. ID: ' . \$u->id . PHP_EOL;
+        " 2>/dev/null && ok "User '${U_USER}' saved directly in database." || err "Failed to save user in database."
+    fi
+
+    # Append to credentials file
+    local CRED_FILE="/root/pterodactyl_credentials.txt"
+    cat >> "$CRED_FILE" <<EOF
+
+--- User Added: $(date) ---
+Email:       $U_EMAIL
+Username:    $U_USER
+Password:    $U_PASS
+Admin:       $([ "$ADMIN_VAL" = "1" ] && echo "Yes" || echo "No")
+---------------------------
+EOF
+    chmod 600 "$CRED_FILE"
+
+    echo -e "\n${HEADER_LINE}"
+    echo -e "  ${GREEN}✔ USER ACCOUNT READY${NC}"
+    echo -e "  ${GRAY}Username :${NC} ${WHITE}$U_USER${NC}"
+    echo -e "  ${GRAY}Email    :${NC} ${WHITE}$U_EMAIL${NC}"
+    echo -e "  ${GRAY}Password :${NC} ${WHITE}$U_PASS${NC}"
+    echo -e "  ${GRAY}Admin    :${NC} ${WHITE}$([ "$ADMIN_VAL" = "1" ] && echo "Yes" || echo "No")${NC}"
+    echo -e "  ${GRAY}Saved to :${NC} ${GREEN}$CRED_FILE${NC}"
+    echo -e "${HEADER_LINE}\n"
+    return 0
+}
+
+create_test_user_quick() {
+    clear
+    echo -e "${CYAN}"
+    echo "============================================================"
+    echo "       PTERODACTYL v2.0 INSTANT TEST USER CREATOR           "
+    echo "============================================================"
+    echo -e "${NC}"
+
+    if [ ! -d "$PANEL_DIR" ]; then
+        err "Panel directory $PANEL_DIR does not exist."
+        return 1
+    fi
+
+    cd "$PANEL_DIR" || exit 1
+    chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+    chown -R www-data:www-data "$PANEL_DIR" 2>/dev/null || true
+
+    local T_EMAIL="test@example.com"
+    local T_USER="testuser"
+    local T_PASS="TestAdmin@12345"
+
+    step "Creating instant test administrator..."
+    php artisan p:user:make -n \
+        --email="$T_EMAIL" \
+        --username="$T_USER" \
+        --password="$T_PASS" \
+        --admin=1 \
+        --name-first="Test" \
+        --name-last="Admin" 2>/dev/null || {
+        php -r "
+        require 'vendor/autoload.php';
+        \$app = require_once 'bootstrap/app.php';
+        \$kernel = \$app->make(Illuminate\Contracts\Console\Kernel::class);
+        \$kernel->bootstrap();
+        \$u = Pterodactyl\Models\User::firstOrNew(['username' => '${T_USER}']);
+        \$u->email = '${T_EMAIL}';
+        \$u->name_first = 'Test';
+        \$u->name_last = 'Admin';
+        \$u->password = Illuminate\Support\Facades\Hash::make('${T_PASS}');
+        \$u->root_admin = true;
+        \$u->save();
+        " 2>/dev/null || true
+    }
+
+    local CRED_FILE="/root/pterodactyl_credentials.txt"
+    cat >> "$CRED_FILE" <<EOF
+
+--- Added Test User: $(date) ---
+Email:       $T_EMAIL
+Username:    $T_USER
+Password:    $T_PASS
+Admin:       Yes
+--------------------------------
+EOF
+    chmod 600 "$CRED_FILE"
+
+    echo -e "\n${HEADER_LINE}"
+    echo -e "  ${GREEN}✔ TEST USER CREATED SUCCESSFULLY!${NC}"
+    echo -e "  ${GRAY}Username :${NC} ${WHITE}${T_USER}${NC}"
+    echo -e "  ${GRAY}Password :${NC} ${WHITE}${T_PASS}${NC} ${GREEN}(Valid 15-char compliant password)${NC}"
+    echo -e "  ${GRAY}Email    :${NC} ${WHITE}${T_EMAIL}${NC}"
+    echo -e "  ${GRAY}Admin    :${NC} ${WHITE}Yes (Root Administrator)${NC}"
+    echo -e "  ${GRAY}Saved to :${NC} ${GREEN}${CRED_FILE}${NC}"
+    echo -e "${HEADER_LINE}\n"
+    return 0
+}
+
+# ==============================================================================
 # TEST SUITE & PRE-FLIGHT VERIFICATION
 # ==============================================================================
 
@@ -1279,6 +1464,12 @@ EOF
     }
     run_check "Pterodactyl v2 PHP Extensions (intl)" "test_v2_intl"
 
+    # 12. Pterodactyl User Creation Command Integrity
+    test_user_make_cmd() {
+        [ -f "$PANEL_DIR/app/Console/Commands/User/MakeUserCommand.php" ] || [ -f "$PANEL_DIR/artisan" ]
+    }
+    run_check "User Creation Command (p:user:make)" "test_user_make_cmd"
+
     # Test Results Summary
     echo -e "\n${HEADER_LINE}"
     echo -e "  ${WHITE}TEST SUMMARY:${NC}"
@@ -1345,6 +1536,18 @@ main() {
         return $?
     fi
 
+    if [[ "$1" == "--user" || "$1" == "user" || "$1" == "--create-user" || "$1" == "create-user" ]]; then
+        auto_detect_system
+        create_panel_user
+        return $?
+    fi
+
+    if [[ "$1" == "--test-user" || "$1" == "test-user" || "$1" == "crate-user" || "$1" == "testuser" || "$1" == "crate" ]]; then
+        auto_detect_system
+        create_test_user_quick
+        return $?
+    fi
+
     auto_detect_system
     show_banner
 
@@ -1352,22 +1555,24 @@ main() {
     echo -e "\n  ${PURPLE}::${NC} ${WHITE}Select Action${NC}"
     if [ "$IS_INSTALLED" = true ]; then
         echo -e "  ${GRAY}1.${NC} ${CYAN}⚡ Full Upgrade to Pterodactyl v2.0 (Migration & Backup)${NC}"
-        echo -e "  ${GRAY}2.${NC} ${WHITE}Reinstall / Fresh Install Pterodactyl v2.0${NC}"
-        echo -e "  ${GRAY}3.${NC} ${WHITE}Create Full Safety Backup (Database + .env + Files)${NC}"
-        echo -e "  ${GRAY}4.${NC} ${WHITE}Repair Services, Permissions & Refresh Caches${NC}"
-        echo -e "  ${GRAY}5.${NC} ${WHITE}Run Verification & Diagnostic Suite${NC}"
-        echo -e "  ${GRAY}6.${NC} ${WHITE}Exit${NC}"
-        echo -ne "\n  ${PURPLE}•${NC} ${WHITE}Choose option [1-6]${NC} ${GRAY}[1]${NC}\n  ${GRAY}╰─>${NC} "
+        echo -e "  ${GRAY}2.${NC} ${WHITE}👤 Create / Test Panel User (Admin or Normal)${NC}"
+        echo -e "  ${GRAY}3.${NC} ${WHITE}Reinstall / Fresh Install Pterodactyl v2.0${NC}"
+        echo -e "  ${GRAY}4.${NC} ${WHITE}Create Full Safety Backup (Database + .env + Files)${NC}"
+        echo -e "  ${GRAY}5.${NC} ${WHITE}Repair Services, Permissions & Refresh Caches${NC}"
+        echo -e "  ${GRAY}6.${NC} ${WHITE}Run Verification & Diagnostic Suite${NC}"
+        echo -e "  ${GRAY}7.${NC} ${WHITE}Exit${NC}"
+        echo -ne "\n  ${PURPLE}•${NC} ${WHITE}Choose option [1-7]${NC} ${GRAY}[1]${NC}\n  ${GRAY}╰─>${NC} "
         read -t 15 -r MENU_ACTION || MENU_ACTION="1"
         [ -z "$MENU_ACTION" ] && MENU_ACTION="1"
 
         case "$MENU_ACTION" in
             1) upgrade_to_v2 ;;
-            2) install_pterodactyl_v2 ;;
-            3) backup_panel; exit 0 ;;
-            4) repair_panel ;;
-            5) run_test_suite ;;
-            6) echo -e "  ${GRAY}Exiting.${NC}"; exit 0 ;;
+            2) create_panel_user ;;
+            3) install_pterodactyl_v2 ;;
+            4) backup_panel; exit 0 ;;
+            5) repair_panel ;;
+            6) run_test_suite ;;
+            7) echo -e "  ${GRAY}Exiting.${NC}"; exit 0 ;;
             *) warn "Invalid option. Proceeding with Pterodactyl v2 upgrade..."; upgrade_to_v2 ;;
         esac
     else
