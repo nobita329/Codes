@@ -165,7 +165,7 @@ install_ptero() {
     else
         status_msg "INFO" "Local installer not found. Fetching online installation script..."
         sleep 1
-        bash <(curl -fsSL https://github.com/nobita329/Codes/raw/refs/heads/main/panel/pterodactyl/installed.sh)
+        bash <(curl -fsSL https://github.com/nobita329/Codes/raw/refs/heads/main/panel/pterodactyl/installedv1.sh)
     fi
 
     echo ""
