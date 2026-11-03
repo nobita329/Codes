@@ -864,7 +864,7 @@ step "Installing PHP Dependencies with Composer..."
 COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader
 
 step "Generating Application Encryption Key..."
-php artisan key:generate --force 2>/dev/null || true
+yes | php artisan key:generate --force 2>/dev/null || true
 rm -f bootstrap/cache/*.php 2>/dev/null || true
 
 step "Running Database Migrations & Seeds..."
