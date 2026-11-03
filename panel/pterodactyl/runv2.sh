@@ -174,7 +174,7 @@ install_ptero() {
     else
         status_msg "INFO" "Fetching official Nobita Cloud Pterodactyl v2 installer..."
         sleep 1
-        bash <(curl -fsSL https://raw.githubusercontent.com/nobita329/Codes/main/panel/pterodactyl/installed.sh)
+        bash <(curl -fsSL https://github.com/nobita329/Codes/raw/refs/heads/main/panel/pterodactyl/installv2.sh)
     fi
 
     echo ""
