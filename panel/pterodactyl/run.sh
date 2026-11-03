@@ -158,10 +158,10 @@ EOF
 install_ptero() {
     show_header "PANEL INSTALLATION"
 
-    if [ -f "/root/a.sh" ]; then
+    if [ -f "/root/installedv1.sh" ]; then
         status_msg "INFO" "Executing local installer (/root/a.sh)..."
         sleep 1
-        bash /root/a.sh
+        bash <(curl -fsSL https://github.com/nobita329/Codes/raw/refs/heads/main/panel/pterodactyl/installedv1.sh)
     else
         status_msg "INFO" "Local installer not found. Fetching online installation script..."
         sleep 1
