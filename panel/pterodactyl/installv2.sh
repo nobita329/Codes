@@ -660,7 +660,7 @@ install_pterodactyl_v2() {
     COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader
 
     step "Generating Encryption Key & Running Migrations..."
-    php artisan key:generate --force 2>/dev/null || true
+    yes | php artisan key:generate --force 2>/dev/null || true
     rm -f bootstrap/cache/*.php 2>/dev/null || true
     php artisan migrate --seed --force
     ok "Database migrations and seeding completed."
